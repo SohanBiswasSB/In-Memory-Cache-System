@@ -44,28 +44,26 @@ class _Node(Generic[K]):
 
     __slots__ = ("key", "prev", "next")
 
-    def __init__(self, key: Optional[K] = None) -> None:
+    def __init__(self, key: K) -> None:
         self.key = key
-        self.prev: Optional["_Node[K]"] = None
-        self.next: Optional["_Node[K]"] = None
+        self.prev: "_Node[K]" = self
+        self.next: "_Node[K]" = self
 
 
 class LRUEvictionPolicy(EvictionPolicy[K]):
     """
-    Least recently used, backed by a dict of keys to nodes in a doubly linked
-    list.
+    Least recently used, backed by a dict of keys to nodes in a circular doubly
+    linked list.
 
-    Layout is head <-> least recent ... most recent <-> tail. Head and tail are
-    sentinels so unlinking never has to special case the ends. All operations
-    are O(1).
+    One sentinel node closes the ring, so `sentinel.next` is the coldest key and
+    `sentinel.prev` is the hottest, and unlinking never has to special case the
+    ends. All operations are O(1).
     """
 
     def __init__(self) -> None:
         self._nodes: dict[K, _Node[K]] = {}
-        self._head: _Node[K] = _Node()  # LRU side
-        self._tail: _Node[K] = _Node()  # MRU side
-        self._head.next = self._tail
-        self._tail.prev = self._head
+        # The sentinel's key is never read; it exists only to anchor the ring.
+        self._sentinel: _Node[K] = _Node(None)  # type: ignore[arg-type]
 
     def on_access(self, key: K) -> None:
         node = self._nodes.get(key)
@@ -83,9 +81,8 @@ class LRUEvictionPolicy(EvictionPolicy[K]):
 
     def candidates(self) -> Iterator[K]:
         """Walks least-recent to most-recent."""
-        node = self._head.next
-        while node is not self._tail:
-            assert node is not None and node.key is not None
+        node = self._sentinel.next
+        while node is not self._sentinel:
             # Snapshot `next` first: the caller may remove the current key.
             following = node.next
             yield node.key
@@ -93,22 +90,80 @@ class LRUEvictionPolicy(EvictionPolicy[K]):
 
     def clear(self) -> None:
         self._nodes.clear()
-        self._head.next = self._tail
-        self._tail.prev = self._head
+        self._sentinel.next = self._sentinel
+        self._sentinel.prev = self._sentinel
 
     def __len__(self) -> int:
         return len(self._nodes)
 
-    # --- list plumbing -------------------------------------------------
-
     def _unlink(self, node: _Node[K]) -> None:
-        node.prev.next = node.next  # type: ignore[union-attr]
-        node.next.prev = node.prev  # type: ignore[union-attr]
-        node.prev = node.next = None
+        node.prev.next = node.next
+        node.next.prev = node.prev
+        node.prev = node.next = node
 
     def _append_as_most_recent(self, node: _Node[K]) -> None:
-        last = self._tail.prev
-        last.next = node  # type: ignore[union-attr]
+        last = self._sentinel.prev
+        last.next = node
         node.prev = last
-        node.next = self._tail
-        self._tail.prev = node
+        node.next = self._sentinel
+        self._sentinel.prev = node
+
+
+class LFUEvictionPolicy(EvictionPolicy[K]):
+    """
+    Least frequently used, with ties broken by which key was touched longest ago.
+
+    Frequency counts live in a dict, and each frequency owns an insertion
+    ordered set of the keys at that count. Tracking the smallest live frequency
+    keeps eviction O(1) rather than a scan for the minimum.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[K, int] = {}
+        self._buckets: dict[int, dict[K, None]] = {}
+        self._min_count = 0
+
+    def on_access(self, key: K) -> None:
+        count = self._counts.get(key, 0)
+        if count:
+            self._leave_bucket(key, count)
+        self._counts[key] = count + 1
+        self._buckets.setdefault(count + 1, {})[key] = None
+        if count == 0:
+            self._min_count = 1
+
+    def on_remove(self, key: K) -> None:
+        count = self._counts.pop(key, None)
+        if count is not None:
+            self._leave_bucket(key, count)
+
+    def candidates(self) -> Iterator[K]:
+        """Walks rarest to most used, oldest first within a frequency."""
+        for count in sorted(self._buckets):
+            yield from list(self._buckets[count])
+
+    def evict_candidate(self) -> Optional[K]:
+        bucket = self._buckets.get(self._min_count)
+        if not bucket:
+            return next(self.candidates(), None)
+        return next(iter(bucket))
+
+    def clear(self) -> None:
+        self._counts.clear()
+        self._buckets.clear()
+        self._min_count = 0
+
+    def __len__(self) -> int:
+        return len(self._counts)
+
+    def _leave_bucket(self, key: K, count: int) -> None:
+        # Indexed rather than .get(): every counted key is in its bucket, and a
+        # KeyError here would mean that invariant had broken silently.
+        bucket = self._buckets[count]
+        bucket.pop(key, None)
+        if bucket:
+            return
+        del self._buckets[count]
+        if count == self._min_count:
+            # Nothing is left at the old minimum, so the next count up becomes it.
+            self._min_count = min(self._buckets, default=0)

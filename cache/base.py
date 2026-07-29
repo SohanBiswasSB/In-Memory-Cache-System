@@ -1,14 +1,24 @@
-"""Cache interface and the stats record it returns."""
+"""Cache interface, the stats record it returns, and removal reasons."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Generic, Optional, TypeVar
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
+
+
+class RemovalReason(Enum):
+    """Why an entry left the cache. Passed to a removal listener."""
+
+    EXPIRED = "expired"
+    EVICTED = "evicted"
+    REMOVED = "removed"
+    REPLACED = "replaced"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +35,17 @@ class CacheStats:
         """Fraction of lookups served from cache; 0.0 if never queried."""
         lookups = self.hits + self.misses
         return self.hits / lookups if lookups else 0.0
+
+    def __add__(self, other: "CacheStats") -> "CacheStats":
+        """Combine two snapshots, so a sharded cache can total its shards."""
+        if not isinstance(other, CacheStats):
+            return NotImplemented
+        return CacheStats(
+            hits=self.hits + other.hits,
+            misses=self.misses + other.misses,
+            evictions=self.evictions + other.evictions,
+            expirations=self.expirations + other.expirations,
+        )
 
 
 class Cache(ABC, Generic[K, V]):
@@ -55,6 +76,14 @@ class Cache(ABC, Generic[K, V]):
     @abstractmethod
     def clear(self) -> None:
         """Drop every entry, resetting the cache to empty."""
+
+    @abstractmethod
+    def stats(self) -> CacheStats:
+        """Snapshot of the counters."""
+
+    @abstractmethod
+    def purge_expired(self) -> int:
+        """Reclaim expired entries eagerly. Returns how many were dropped."""
 
     @abstractmethod
     def __len__(self) -> int: ...

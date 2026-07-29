@@ -1,23 +1,18 @@
 """Tests: pytest, or python -m unittest discover -s tests -t .
 
-Docstring checks are off because the method names say what they check. The
-import position check is off because the path setup has to run first.
+Docstring checks are off because the method names say what they check.
 """
 
 # pylint: disable=missing-class-docstring, missing-function-docstring
-# pylint: disable=wrong-import-position
 
 from __future__ import annotations
 
 import math
-import sys
-import threading
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cache import InMemoryCache, ManualClock
 
-from cache import InMemoryCache, ManualClock  # noqa: E402
+from .support import run_concurrently
 
 
 class TestBasicOperations(unittest.TestCase):
@@ -207,20 +202,14 @@ class TestStats(unittest.TestCase):
 class TestConcurrency(unittest.TestCase):
     def test_concurrent_writers_respect_capacity(self) -> None:
         cache: InMemoryCache[int, int] = InMemoryCache(capacity=50)
-        barrier = threading.Barrier(8)
 
         def hammer(offset: int) -> None:
-            barrier.wait()
             for i in range(500):
                 key = (offset * 500 + i) % 200
                 cache.put(key, i)
                 cache.get(key)
 
-        threads = [threading.Thread(target=hammer, args=(t,)) for t in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        run_concurrently(hammer)
 
         self.assertLessEqual(len(cache), 50)
 
