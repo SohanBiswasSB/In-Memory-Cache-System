@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pylint.main]
+# Make the project root importable so `cache` resolves when linting.
+init-hook = "import sys; sys.path.insert(0, '.')"
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pylint.basic]
+# pylint reads a module level name bound to a function as a variable rather than
+# a constant, so it wants MONOTONIC_CLOCK in snake_case. Setting good-names
+# replaces pylint's defaults, hence the usual entries are repeated here.
+good-names = ["i", "j", "k", "ex", "Run", "_", "MONOTONIC_CLOCK"]
+
+[tool.pylint."messages control"]
+# _Node and _Counters are data holders and do not need methods.
+disable = ["too-few-public-methods"]

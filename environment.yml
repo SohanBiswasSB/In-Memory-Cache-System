@@ -1,0 +1,13 @@
+# conda env create -f environment.yml
+#
+# Tooling only; the cache package is standard library.
+name: Interview_Practice
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      # 3.x or newer is required on Python 3.12.
+      - pylint>=3.3
+      - pytest>=8.0

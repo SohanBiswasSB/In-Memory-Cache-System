@@ -1,0 +1,5 @@
+# Tooling only. The cache package itself is standard library.
+# pylint must be 3.x or newer on Python 3.12; 2.x cannot parse 3.12 syntax and
+# reports the failure as a bogus import error.
+pylint>=3.3
+pytest>=8.0
