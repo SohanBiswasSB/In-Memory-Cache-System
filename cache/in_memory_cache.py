@@ -350,7 +350,17 @@ class InMemoryCache(Cache[K, V]):
     def _discard(self, key: K, reason: RemovalReason) -> None:
         """Only place a key is removed, so the policy cannot drift out of sync
         with the entry dict. Caller must hold the lock."""
-        entry = self._entries.pop(key)
+        try:
+            entry = self._entries.pop(key)
+        except KeyError:
+            # The policy nominated a key this cache does not hold, so the two
+            # key sets have drifted. Say so, rather than surfacing a bare
+            # KeyError from deep inside an eviction.
+            raise RuntimeError(
+                f"eviction policy {type(self._policy).__name__} nominated {key!r}, "
+                "which this cache does not hold; the policy is tracking keys from "
+                "somewhere else (a policy instance must not be shared between caches)"
+            ) from None
         self._policy.on_remove(key)
         self._weight -= entry.weight
         if reason is RemovalReason.EXPIRED:

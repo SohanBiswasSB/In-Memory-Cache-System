@@ -6,7 +6,13 @@ from __future__ import annotations
 
 import unittest
 
-from cache import Cache, ManualClock, ShardedCache
+from cache import (
+    Cache,
+    LFUEvictionPolicy,
+    LRUEvictionPolicy,
+    ManualClock,
+    ShardedCache,
+)
 
 from .support import run_concurrently
 
@@ -126,6 +132,27 @@ class TestShardedCache(unittest.TestCase):
             ShardedCache(capacity=0, shards=4)
         with self.assertRaises(ValueError):
             ShardedCache(capacity=10, shards=0)
+
+    def test_rejects_a_shared_policy_instance(self) -> None:
+        # One policy across shards would track every key, so a shard could be
+        # told to evict a key it does not hold.
+        with self.assertRaises(ValueError) as caught:
+            ShardedCache(capacity=8, shards=4, eviction_policy=LRUEvictionPolicy())
+
+        self.assertIn("policy_factory", str(caught.exception))
+
+    def test_policy_factory_gives_each_shard_its_own_policy(self) -> None:
+        cache: ShardedCache[int, int] = ShardedCache(
+            capacity=8, shards=4, policy_factory=LFUEvictionPolicy
+        )
+        # This pattern is what breaks with a shared policy: key 1 lands in one
+        # shard and is globally coldest, while another shard is the one evicting.
+        cache.put(1, 1)
+        for key in (0, 4, 8, 12, 16):
+            cache.put(key, key)
+
+        self.assertEqual(1, cache.get(1))
+        self.assertLessEqual(len(cache), cache.capacity)
 
     def test_repr_mentions_shape(self) -> None:
         cache: ShardedCache[str, int] = ShardedCache(capacity=8, shards=2)

@@ -7,6 +7,7 @@ from collections.abc import Callable, Hashable
 from typing import Any, Optional, TypeVar
 
 from .base import Cache, CacheStats
+from .eviction import EvictionPolicy
 from .in_memory_cache import InMemoryCache
 
 K = TypeVar("K", bound=Hashable)
@@ -32,16 +33,33 @@ class ShardedCache(Cache[K, V]):
         capacity: int,
         *,
         shards: int = 8,
+        policy_factory: Optional[Callable[[], EvictionPolicy[K]]] = None,
         **cache_options: Any,
     ) -> None:
         if capacity <= 0:
             raise ValueError(f"capacity must be positive, got {capacity}")
         if shards <= 0:
             raise ValueError(f"shards must be positive, got {shards}")
+        if "eviction_policy" in cache_options:
+            # Sharing one policy across shards is silently wrong: it would track
+            # every key, so a shard could be told to evict a key it does not
+            # hold. Each shard needs its own instance, hence a factory.
+            raise ValueError(
+                "pass policy_factory to ShardedCache rather than eviction_policy, "
+                "so each shard gets its own policy instance"
+            )
 
         per_shard = max(1, math.ceil(capacity / shards))
         self._shards: tuple[InMemoryCache[K, V], ...] = tuple(
-            InMemoryCache(per_shard, **cache_options) for _ in range(shards)
+            InMemoryCache(
+                per_shard,
+                **(
+                    cache_options
+                    if policy_factory is None
+                    else {**cache_options, "eviction_policy": policy_factory()}
+                ),
+            )
+            for _ in range(shards)
         )
 
     def _shard_for(self, key: K) -> InMemoryCache[K, V]:

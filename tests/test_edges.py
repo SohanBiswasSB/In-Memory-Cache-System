@@ -106,6 +106,37 @@ class TestEvictionEdgeCases(unittest.TestCase):
         self.assertNotIn("old", cache)
 
 
+class _PhantomVictimPolicy(EvictionPolicy[str]):
+    """Nominates a key the cache never held, simulating policy drift."""
+
+    def on_access(self, key: str) -> None:
+        pass
+
+    def on_remove(self, key: str) -> None:
+        pass
+
+    def candidates(self) -> Iterator[str]:
+        return iter(("ghost",))
+
+    def clear(self) -> None:
+        pass
+
+
+class TestPolicyDrift(unittest.TestCase):
+    def test_a_policy_nominating_an_unknown_key_fails_loudly(self) -> None:
+        cache: InMemoryCache[str, int] = InMemoryCache(
+            capacity=1, eviction_policy=_PhantomVictimPolicy()
+        )
+        cache.put("a", 1)
+
+        with self.assertRaises(RuntimeError) as caught:
+            cache.put("b", 2)
+
+        message = str(caught.exception)
+        self.assertIn("ghost", message)
+        self.assertIn("does not hold", message)
+
+
 class TestRepr(unittest.TestCase):
     def test_repr_reports_size_capacity_and_policy(self) -> None:
         cache: InMemoryCache[str, int] = InMemoryCache(capacity=4)
